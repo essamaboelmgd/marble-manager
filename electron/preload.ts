@@ -19,6 +19,9 @@ const api: MarbleApi = {
     list: () => ipcRenderer.invoke("purchases:list"),
     create: (input) => ipcRenderer.invoke("purchases:create", input),
   },
+  invoices: {
+    details: (invoiceType, invoiceId) => ipcRenderer.invoke("invoices:details", invoiceType, invoiceId),
+  },
   sales: {
     list: () => ipcRenderer.invoke("sales:list"),
     create: (input) => ipcRenderer.invoke("sales:create", input),

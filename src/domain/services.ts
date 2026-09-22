@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import Database from "better-sqlite3";
 import type {
   ExpenseInput,
+  InvoiceDetail,
+  InvoiceItemDetail,
+  InvoicePaymentDetail,
   InvoiceResult,
   InvoiceType,
   PartyInput,
@@ -15,6 +18,7 @@ import type {
   WithdrawalInput,
 } from "./types";
 import { createDatabase } from "./database";
+import { calculateLineTotalMinor, resolveQuantityScaled } from "./calculations";
 
 export { createDatabase } from "./database";
 
@@ -32,10 +36,6 @@ function requirePositive(value: number, label: string): void {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`${label} يجب أن يكون رقمًا صحيحًا أكبر من صفر`);
   }
-}
-
-function lineTotal(qtyScaled: number, unitPriceMinor: number, discountMinor = 0): number {
-  return Math.round((qtyScaled * unitPriceMinor) / QUANTITY_SCALE) - discountMinor;
 }
 
 function partyExists(db: Database.Database, partyId: string, kind: "customer" | "supplier"): void {
@@ -243,13 +243,16 @@ export function createPurchase(db: Database.Database, input: PurchaseInput): Inv
 
   return db.transaction(() => {
     const preparedItems = input.items.map((item) => {
-      requirePositive(item.qtyScaled, "الكمية");
+      const qtyScaled = resolveQuantityScaled(item);
       if (!Number.isInteger(item.unitPriceMinor) || item.unitPriceMinor < 0) throw new Error("سعر الشراء غير صحيح");
       const product = productRow(db, item.productId);
       return {
         ...item,
+        qtyScaled,
+        width: item.width ?? null,
+        height: item.height ?? null,
         product,
-        totalMinor: lineTotal(item.qtyScaled, item.unitPriceMinor),
+        totalMinor: calculateLineTotalMinor(qtyScaled, item.unitPriceMinor),
       };
     });
     const totalMinor = preparedItems.reduce((sum, item) => sum + item.totalMinor, 0);
@@ -263,9 +266,9 @@ export function createPurchase(db: Database.Database, input: PurchaseInput): Inv
 
     for (const item of preparedItems) {
       db.prepare(`
-        INSERT INTO purchase_invoice_items (id, invoice_id, product_id, qty_scaled, unit_price_minor, total_minor)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(id(), invoiceId, item.productId, item.qtyScaled, item.unitPriceMinor, item.totalMinor);
+        INSERT INTO purchase_invoice_items (id, invoice_id, product_id, qty_scaled, width, height, unit_price_minor, total_minor)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id(), invoiceId, item.productId, item.qtyScaled, item.width, item.height, item.unitPriceMinor, item.totalMinor);
       db.prepare(`
         INSERT INTO stock_movements (id, product_id, qty_scaled, unit_cost_minor, source_type, source_id, date)
         VALUES (?, ?, ?, ?, 'purchase', ?, ?)
@@ -305,7 +308,7 @@ export function createSale(db: Database.Database, input: SaleInput): InvoiceResu
 
   return db.transaction(() => {
     const preparedItems = input.items.map((item) => {
-      const qtyScaled = item.qtyScaled ?? QUANTITY_SCALE;
+      const qtyScaled = item.kind === "stock" ? resolveQuantityScaled(item) : item.qtyScaled ?? QUANTITY_SCALE;
       requirePositive(qtyScaled, "الكمية");
       if (!Number.isInteger(item.unitPriceMinor) || item.unitPriceMinor < 0) throw new Error("سعر البيع غير صحيح");
       const discountMinor = item.discountMinor ?? 0;
@@ -315,12 +318,14 @@ export function createSale(db: Database.Database, input: SaleInput): InvoiceResu
         return {
           kind: item.kind,
           name: item.name.trim(),
+          width: null,
+          height: null,
           qtyScaled,
           unitId: null,
           productId: null,
           unitPriceMinor: item.unitPriceMinor,
           discountMinor,
-          totalMinor: lineTotal(qtyScaled, item.unitPriceMinor, discountMinor),
+          totalMinor: calculateLineTotalMinor(qtyScaled, item.unitPriceMinor, discountMinor),
           costMinor: 0,
           costTotalMinor: 0,
         };
@@ -330,12 +335,14 @@ export function createSale(db: Database.Database, input: SaleInput): InvoiceResu
       return {
         kind: item.kind,
         name: product.name,
+        width: item.width ?? null,
+        height: item.height ?? null,
         qtyScaled,
         unitId: product.unitId,
         productId: product.id,
         unitPriceMinor: item.unitPriceMinor,
         discountMinor,
-        totalMinor: lineTotal(qtyScaled, item.unitPriceMinor, discountMinor),
+        totalMinor: calculateLineTotalMinor(qtyScaled, item.unitPriceMinor, discountMinor),
         costMinor: product.avgCostMinor,
         costTotalMinor: Math.round((qtyScaled * product.avgCostMinor) / QUANTITY_SCALE),
       };
@@ -352,10 +359,10 @@ export function createSale(db: Database.Database, input: SaleInput): InvoiceResu
     for (const item of preparedItems) {
       db.prepare(`
         INSERT INTO sales_invoice_items
-          (id, invoice_id, line_kind, product_id, name, qty_scaled, unit_id, unit_price_minor, discount_minor, total_minor, cost_minor, cost_total_minor)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, invoice_id, line_kind, product_id, name, qty_scaled, width, height, unit_id, unit_price_minor, discount_minor, total_minor, cost_minor, cost_total_minor)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        id(), invoiceId, item.kind, item.productId, item.name, item.qtyScaled, item.unitId,
+        id(), invoiceId, item.kind, item.productId, item.name, item.qtyScaled, item.width, item.height, item.unitId,
         item.unitPriceMinor, item.discountMinor, item.totalMinor, item.costMinor, item.costTotalMinor,
       );
       if (item.kind === "stock" && item.productId) {
@@ -498,6 +505,7 @@ export function listAppointments(db: Database.Database): Array<{
   id: string;
   customerId: string;
   customerName: string;
+  customerPhone: string;
   saleInvoiceId: string;
   invoiceNumber: number;
   scheduledAt: string;
@@ -505,7 +513,7 @@ export function listAppointments(db: Database.Database): Array<{
   notes: string;
 }> {
   return db.prepare(`
-    SELECT a.id, a.customer_id as customerId, p.name as customerName,
+    SELECT a.id, a.customer_id as customerId, p.name as customerName, p.phone as customerPhone,
       a.sale_invoice_id as saleInvoiceId, s.invoice_number as invoiceNumber,
       a.scheduled_at as scheduledAt, a.status, a.notes
     FROM appointments a
@@ -517,6 +525,7 @@ export function listAppointments(db: Database.Database): Array<{
     id: string;
     customerId: string;
     customerName: string;
+    customerPhone: string;
     saleInvoiceId: string;
     invoiceNumber: number;
     scheduledAt: string;
@@ -551,6 +560,7 @@ export function listSalesInvoices(db: Database.Database): Array<{
   invoiceNumber: number;
   customerId: string;
   customerName: string;
+  customerPhone: string;
   date: string;
   totalMinor: number;
   paidMinor: number;
@@ -559,7 +569,7 @@ export function listSalesInvoices(db: Database.Database): Array<{
 }> {
   return db.prepare(`
     SELECT s.id, s.invoice_number as invoiceNumber, s.customer_id as customerId,
-      p.name as customerName, s.date, s.total_minor as totalMinor,
+      p.name as customerName, p.phone as customerPhone, s.date, s.total_minor as totalMinor,
       COALESCE(SUM(pay.amount_minor), 0) as paidMinor,
       s.total_minor - COALESCE(SUM(pay.amount_minor), 0) as remainingMinor,
       s.status
@@ -573,6 +583,7 @@ export function listSalesInvoices(db: Database.Database): Array<{
     invoiceNumber: number;
     customerId: string;
     customerName: string;
+    customerPhone: string;
     date: string;
     totalMinor: number;
     paidMinor: number;
@@ -586,6 +597,7 @@ export function listPurchaseInvoices(db: Database.Database): Array<{
   invoiceNumber: number;
   supplierId: string;
   supplierName: string;
+  supplierPhone: string;
   date: string;
   totalMinor: number;
   paidMinor: number;
@@ -594,7 +606,7 @@ export function listPurchaseInvoices(db: Database.Database): Array<{
 }> {
   return db.prepare(`
     SELECT s.id, s.invoice_number as invoiceNumber, s.supplier_id as supplierId,
-      p.name as supplierName, s.date, s.total_minor as totalMinor,
+      p.name as supplierName, p.phone as supplierPhone, s.date, s.total_minor as totalMinor,
       COALESCE(SUM(pay.amount_minor), 0) as paidMinor,
       s.total_minor - COALESCE(SUM(pay.amount_minor), 0) as remainingMinor,
       s.status
@@ -608,12 +620,80 @@ export function listPurchaseInvoices(db: Database.Database): Array<{
     invoiceNumber: number;
     supplierId: string;
     supplierName: string;
+    supplierPhone: string;
     date: string;
     totalMinor: number;
     paidMinor: number;
     remainingMinor: number;
     status: string;
   }>;
+}
+
+export function getInvoiceDetails(db: Database.Database, input: { invoiceType: InvoiceType; invoiceId: string }): InvoiceDetail {
+  const invoiceTable = input.invoiceType === "sale" ? "sales_invoices" : "purchase_invoices";
+  const partyColumn = input.invoiceType === "sale" ? "customer_id" : "supplier_id";
+  const row = db.prepare(`
+    SELECT i.id, i.invoice_number as invoiceNumber, i.${partyColumn} as partyId,
+      p.name as partyName, p.phone as partyPhone, p.address as partyAddress,
+      i.date, i.total_minor as totalMinor, i.status, i.notes
+    FROM ${invoiceTable} i
+    JOIN parties p ON p.id = i.${partyColumn}
+    WHERE i.id = ?
+  `).get(input.invoiceId) as {
+    id: string;
+    invoiceNumber: number;
+    partyId: string;
+    partyName: string;
+    partyPhone: string;
+    partyAddress: string;
+    date: string;
+    totalMinor: number;
+    status: string;
+    notes: string;
+  } | undefined;
+  if (!row) throw new Error("الفاتورة غير موجودة");
+
+  const items = (input.invoiceType === "sale"
+    ? db.prepare(`
+        SELECT i.id, i.line_kind as kind, i.product_id as productId, i.name,
+          i.width, i.height, i.qty_scaled as qtyScaled,
+          COALESCE(u.symbol, 'م²') as unitSymbol,
+          i.unit_price_minor as unitPriceMinor, i.discount_minor as discountMinor,
+          i.total_minor as totalMinor
+        FROM sales_invoice_items i
+        LEFT JOIN units u ON u.id = i.unit_id
+        WHERE i.invoice_id = ? ORDER BY i.rowid
+      `).all(input.invoiceId)
+    : db.prepare(`
+        SELECT i.id, 'stock' as kind, i.product_id as productId, p.name,
+          i.width, i.height, i.qty_scaled as qtyScaled,
+          COALESCE(u.symbol, 'م²') as unitSymbol,
+          i.unit_price_minor as unitPriceMinor, 0 as discountMinor,
+          i.total_minor as totalMinor
+        FROM purchase_invoice_items i
+        JOIN products p ON p.id = i.product_id
+        LEFT JOIN units u ON u.id = p.unit_id
+        WHERE i.invoice_id = ? ORDER BY i.rowid
+      `).all(input.invoiceId)) as InvoiceItemDetail[];
+
+  const payments = db.prepare(`
+    SELECT pay.id, pay.amount_minor as amountMinor, pay.method, pay.date,
+      a.name as accountName, pay.notes
+    FROM payments pay
+    JOIN accounts a ON a.id = pay.account_id
+    WHERE pay.invoice_type = ? AND pay.invoice_id = ?
+    ORDER BY pay.date, pay.rowid
+  `).all(input.invoiceType, input.invoiceId) as InvoicePaymentDetail[];
+  const paidMinor = payments.reduce((sum, payment) => sum + payment.amountMinor, 0);
+
+  return {
+    ...row,
+    invoiceType: input.invoiceType,
+    paidMinor,
+    remainingMinor: row.totalMinor - paidMinor,
+    items,
+    payments,
+  };
 }
 
 export function listFinancialTransactions(db: Database.Database): Array<{

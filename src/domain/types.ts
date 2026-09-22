@@ -38,14 +38,18 @@ export interface ProductRecord extends ProductInput {
 
 export interface PurchaseLineInput {
   productId: string;
-  qtyScaled: number;
+  qtyScaled?: number;
+  width?: number;
+  height?: number;
   unitPriceMinor: number;
 }
 
 export interface SaleStockLineInput {
   kind: "stock";
   productId: string;
-  qtyScaled: number;
+  qtyScaled?: number;
+  width?: number;
+  height?: number;
   unitPriceMinor: number;
   discountMinor?: number;
 }
@@ -92,6 +96,47 @@ export interface InvoiceResult {
   invoiceNumber: number;
   totalMinor: number;
   paidMinor: number;
+}
+
+export interface InvoiceItemDetail {
+  id: string;
+  kind: SaleLineKind;
+  productId: string | null;
+  name: string;
+  width: number | null;
+  height: number | null;
+  qtyScaled: number;
+  unitSymbol: string;
+  unitPriceMinor: number;
+  discountMinor: number;
+  totalMinor: number;
+}
+
+export interface InvoicePaymentDetail {
+  id: string;
+  amountMinor: number;
+  method: PaymentMethod;
+  date: string;
+  accountName: string;
+  notes: string;
+}
+
+export interface InvoiceDetail {
+  invoiceType: InvoiceType;
+  id: string;
+  invoiceNumber: number;
+  partyId: string;
+  partyName: string;
+  partyPhone: string;
+  partyAddress: string;
+  date: string;
+  totalMinor: number;
+  paidMinor: number;
+  remainingMinor: number;
+  status: string;
+  notes: string;
+  items: InvoiceItemDetail[];
+  payments: InvoicePaymentDetail[];
 }
 
 export interface PaymentInput {

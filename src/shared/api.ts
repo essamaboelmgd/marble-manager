@@ -6,6 +6,8 @@ import type {
   ProductInput,
   PurchaseInput,
   SaleInput,
+  InvoiceDetail,
+  InvoiceType,
   WithdrawalInput,
 } from "../domain/types";
 
@@ -33,6 +35,9 @@ export interface MarbleApi {
   purchases: {
     list: () => Promise<unknown[]>;
     create: (input: PurchaseInput) => Promise<unknown>;
+  };
+  invoices: {
+    details: (invoiceType: InvoiceType, invoiceId: string) => Promise<InvoiceDetail>;
   };
   sales: {
     list: () => Promise<unknown[]>;

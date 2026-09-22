@@ -1,6 +1,13 @@
 import Database from "better-sqlite3";
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
+
+function ensureColumn(db: Database.Database, table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
 
 export function createDatabase(filename: string): Database.Database {
   const db = new Database(filename);
@@ -96,6 +103,8 @@ export function runMigrations(db: Database.Database): void {
       product_id TEXT REFERENCES products(id),
       name TEXT NOT NULL,
       qty_scaled INTEGER NOT NULL,
+      width REAL,
+      height REAL,
       unit_id TEXT REFERENCES units(id),
       unit_price_minor INTEGER NOT NULL,
       discount_minor INTEGER NOT NULL DEFAULT 0,
@@ -121,6 +130,8 @@ export function runMigrations(db: Database.Database): void {
       invoice_id TEXT NOT NULL REFERENCES purchase_invoices(id),
       product_id TEXT NOT NULL REFERENCES products(id),
       qty_scaled INTEGER NOT NULL,
+      width REAL,
+      height REAL,
       unit_price_minor INTEGER NOT NULL,
       total_minor INTEGER NOT NULL
     );
@@ -201,6 +212,11 @@ export function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_financial_account_date ON financial_transactions(account_id, date);
     CREATE INDEX IF NOT EXISTS idx_stock_product_date ON stock_movements(product_id, date);
   `);
+
+  ensureColumn(db, "sales_invoice_items", "width", "REAL");
+  ensureColumn(db, "sales_invoice_items", "height", "REAL");
+  ensureColumn(db, "purchase_invoice_items", "width", "REAL");
+  ensureColumn(db, "purchase_invoice_items", "height", "REAL");
 
   db.prepare(
     "INSERT INTO schema_meta (key, value) VALUES ('version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",

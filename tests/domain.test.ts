@@ -9,6 +9,7 @@ import {
   createSale,
   getAccountBalance,
   getCustomerBalance,
+  getInvoiceDetails,
   getProduct,
   getSetupIds,
   recordPayment,
@@ -173,5 +174,55 @@ describe("marble inventory and finance transactions", () => {
     expect(getProduct(db, product.id)?.stockQtyScaled).toBe(5000);
     expect(getCustomerBalance(db, customer.id, "customer")).toBe(0);
     expect(getAccountBalance(db, ids.cashAccountId)).toBe(0);
+  });
+
+  it("calculates dimension-based purchase quantity and supports the remaining supplier payment", () => {
+    const { ids, supplier, product } = createFixture();
+    const invoice = createPurchase(db, {
+      supplierId: supplier.id,
+      accountId: ids.cashAccountId,
+      items: [{ productId: product.id, width: 2.5, height: 2, unitPriceMinor: 10000 }],
+      paidMinor: 5000,
+    });
+
+    expect(invoice.totalMinor).toBe(50000);
+    expect(getProduct(db, product.id)?.stockQtyScaled).toBe(5000);
+    expect(getInvoiceDetails(db, { invoiceType: "purchase", invoiceId: invoice.id }).items[0]).toMatchObject({
+      width: 2.5,
+      height: 2,
+      qtyScaled: 5000,
+      totalMinor: 50000,
+    });
+    expect(getCustomerBalance(db, supplier.id, "supplier")).toBe(45000);
+
+    recordPayment(db, {
+      invoiceType: "purchase",
+      invoiceId: invoice.id,
+      accountId: ids.cashAccountId,
+      amountMinor: 45000,
+      method: "cash",
+    });
+
+    expect(getInvoiceDetails(db, { invoiceType: "purchase", invoiceId: invoice.id }).remainingMinor).toBe(0);
+    expect(getCustomerBalance(db, supplier.id, "supplier")).toBe(0);
+  });
+
+  it("calculates sale totals from width and height without requiring an extra line", () => {
+    const { ids, customer, supplier, product } = createFixture();
+    createPurchase(db, {
+      supplierId: supplier.id,
+      accountId: ids.cashAccountId,
+      items: [{ productId: product.id, width: 2.5, height: 2, unitPriceMinor: 10000 }],
+    });
+    const invoice = createSale(db, {
+      customerId: customer.id,
+      accountId: ids.cashAccountId,
+      items: [{ kind: "stock", productId: product.id, width: 1, height: 2, unitPriceMinor: 40000 }],
+      paidMinor: 5000,
+    });
+
+    expect(invoice.totalMinor).toBe(80000);
+    expect(getProduct(db, product.id)?.stockQtyScaled).toBe(3000);
+    expect(getInvoiceDetails(db, { invoiceType: "sale", invoiceId: invoice.id }).remainingMinor).toBe(75000);
   });
 });

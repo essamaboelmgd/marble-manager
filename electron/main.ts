@@ -14,6 +14,7 @@ import {
   createWithdrawal,
   getCustomerStatement,
   getDashboardSummary,
+  getInvoiceDetails,
   getSettings,
   listAppointments,
   listAccounts,
@@ -108,6 +109,7 @@ function registerIpc(): void {
   ipcMain.handle("products:create", (_event, input) => createProduct(requireDatabase(), input));
   ipcMain.handle("purchases:list", () => listPurchaseInvoices(requireDatabase()));
   ipcMain.handle("purchases:create", (_event, input) => createPurchase(requireDatabase(), input));
+  ipcMain.handle("invoices:details", (_event, invoiceType: InvoiceType, invoiceId: string) => getInvoiceDetails(requireDatabase(), { invoiceType, invoiceId }));
   ipcMain.handle("sales:list", () => listSalesInvoices(requireDatabase()));
   ipcMain.handle("sales:create", (_event, input) => createSale(requireDatabase(), input));
   ipcMain.handle("sales:cancel", (_event, id: string) => cancelInvoice(requireDatabase(), { invoiceType: "sale", invoiceId: id }));
