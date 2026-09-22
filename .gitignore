@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-electron/
+coverage/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.DS_Store
