@@ -27,6 +27,16 @@ export interface ProductInput {
   category?: string;
 }
 
+export interface ProductUpdateInput {
+  name?: string;
+  unitId?: string;
+  purchasePriceMinor?: number;
+  salePriceMinor?: number;
+  minStockQtyScaled?: number;
+  sku?: string;
+  category?: string;
+}
+
 export interface ProductRecord extends ProductInput {
   id: string;
   purchasePriceMinor: number;
@@ -34,6 +44,7 @@ export interface ProductRecord extends ProductInput {
   minStockQtyScaled: number;
   stockQtyScaled: number;
   avgCostMinor: number;
+  avgSalePriceMinor: number;
 }
 
 export interface PurchaseLineInput {

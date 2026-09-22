@@ -23,4 +23,18 @@ describe("local list filtering and pagination", () => {
     expect(result.currentPage).toBe(3);
     expect(result.totalPages).toBe(3);
   });
+
+  it("supports ten-result autocomplete pages", () => {
+    const result = filterAndPaginate(
+      Array.from({ length: 25 }, (_, index) => ({ name: `عميل ${index + 1}` })),
+      "",
+      () => true,
+      2,
+      10,
+    );
+
+    expect(result.items).toHaveLength(10);
+    expect(result.items[0]).toEqual({ name: "عميل 11" });
+    expect(result.totalPages).toBe(3);
+  });
 });

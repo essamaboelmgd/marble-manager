@@ -4,6 +4,7 @@ import type {
   PartyInput,
   PaymentInput,
   ProductInput,
+  ProductUpdateInput,
   PurchaseInput,
   SaleInput,
   InvoiceDetail,
@@ -31,6 +32,8 @@ export interface MarbleApi {
     list: () => Promise<unknown[]>;
     units: () => Promise<unknown[]>;
     create: (input: ProductInput) => Promise<unknown>;
+    update: (id: string, input: ProductUpdateInput) => Promise<unknown>;
+    delete: (id: string) => Promise<void>;
   };
   purchases: {
     list: () => Promise<unknown[]>;
@@ -81,4 +84,4 @@ declare global {
   }
 }
 
-export type { ExpenseInput, InstallationInput, PartyInput, PaymentInput, ProductInput, PurchaseInput, SaleInput, WithdrawalInput };
+export type { ExpenseInput, InstallationInput, PartyInput, PaymentInput, ProductInput, ProductUpdateInput, PurchaseInput, SaleInput, WithdrawalInput };

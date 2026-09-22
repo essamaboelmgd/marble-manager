@@ -12,6 +12,7 @@ import {
   createPurchase,
   createSale,
   createWithdrawal,
+  deleteProduct,
   getCustomerStatement,
   getDashboardSummary,
   getInvoiceDetails,
@@ -28,6 +29,7 @@ import {
   seedDefaults,
   setSetting,
   updateAppointmentStatus,
+  updateProduct,
 } from "../src/domain/services";
 import type { InvoiceType } from "../src/domain/types";
 import { rotateAutomaticBackups } from "../src/domain/backup";
@@ -107,6 +109,8 @@ function registerIpc(): void {
   ipcMain.handle("products:list", () => listProducts(requireDatabase()));
   ipcMain.handle("products:units", () => listUnits(requireDatabase()));
   ipcMain.handle("products:create", (_event, input) => createProduct(requireDatabase(), input));
+  ipcMain.handle("products:update", (_event, productId: string, input) => updateProduct(requireDatabase(), productId, input));
+  ipcMain.handle("products:delete", (_event, productId: string) => deleteProduct(requireDatabase(), productId));
   ipcMain.handle("purchases:list", () => listPurchaseInvoices(requireDatabase()));
   ipcMain.handle("purchases:create", (_event, input) => createPurchase(requireDatabase(), input));
   ipcMain.handle("invoices:details", (_event, invoiceType: InvoiceType, invoiceId: string) => getInvoiceDetails(requireDatabase(), { invoiceType, invoiceId }));

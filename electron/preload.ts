@@ -14,6 +14,8 @@ const api: MarbleApi = {
     list: () => ipcRenderer.invoke("products:list"),
     units: () => ipcRenderer.invoke("products:units"),
     create: (input) => ipcRenderer.invoke("products:create", input),
+    update: (id, input) => ipcRenderer.invoke("products:update", id, input),
+    delete: (id) => ipcRenderer.invoke("products:delete", id),
   },
   purchases: {
     list: () => ipcRenderer.invoke("purchases:list"),

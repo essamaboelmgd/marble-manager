@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownLeft,
   ArrowUpLeft,
@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   LockKeyhole,
   Package,
+  Pencil,
   Plus,
   Receipt,
   RefreshCw,
@@ -436,18 +437,68 @@ function CustomersPage({ refreshToken, onChanged }: { refreshToken: number; onCh
 
 function ProductsPage({ refreshToken, onChanged }: { refreshToken: number; onChanged: () => void }) {
   const [products, setProducts] = useState<Product[]>([]);
-  const [form, setForm] = useState({ name: "", purchasePrice: "", salePrice: "", minStock: "" });
+  const [form, setForm] = useState({ name: "", purchasePrice: "", salePrice: "", minStock: "", sku: "", category: "" });
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const load = () => window.marbleApi.products.list().then((items) => setProducts(items as Product[])).catch((error) => toast.error(errorMessage(error)));
   useEffect(() => { load(); }, [refreshToken]);
   useEffect(() => { setPage(1); }, [query]);
+
   const pagedProducts = filterAndPaginate(products, query, (product, normalizedQuery) => normalizeSearch(`${product.name} ${product.sku} ${product.category}`).includes(normalizedQuery), page);
-  const addProduct = async (event: React.FormEvent) => {
-    event.preventDefault();
-    try { await window.marbleApi.products.create({ name: form.name, unitId: "unit-square-meter", purchasePriceMinor: Math.round(Number(form.purchasePrice || 0) * 100), salePriceMinor: Math.round(Number(form.salePrice || 0) * 100), minStockQtyScaled: Math.round(Number(form.minStock || 0) * 1000) }); toast.success("تم إضافة الصنف"); setForm({ name: "", purchasePrice: "", salePrice: "", minStock: "" }); await load(); onChanged(); } catch (error) { toast.error(errorMessage(error)); }
+  const resetForm = () => {
+    setForm({ name: "", purchasePrice: "", salePrice: "", minStock: "", sku: "", category: "" });
+    setEditingProductId(null);
   };
-  return <><PageIntro title="المخزن والأصناف" description="مخزن رئيسي واحد، وكل الكميات محسوبة بالمتر المربع." /><div className="split-layout"><section className="panel"><div className="panel-heading"><div><h3>إضافة صنف</h3><p>الوحدة ثابتة: متر مربع (م²)</p></div><Package size={20} /></div><form className="form-stack" onSubmit={addProduct}><Field label="اسم الصنف" required><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="رخام كرارا" /></Field><div className="fixed-unit"><span>الوحدة</span><strong>متر مربع (م²)</strong></div><div className="form-grid"><Field label="سعر الشراء / م²"><input type="number" min="0" value={form.purchasePrice} onChange={(event) => setForm({ ...form, purchasePrice: event.target.value })} /></Field><Field label="سعر البيع / م²"><input type="number" min="0" value={form.salePrice} onChange={(event) => setForm({ ...form, salePrice: event.target.value })} /></Field></div><Field label="حد إعادة الطلب بالمتر المربع"><input type="number" min="0" step="0.001" value={form.minStock} onChange={(event) => setForm({ ...form, minStock: event.target.value })} /></Field><button className="primary-button" type="submit"><Plus size={17} /> حفظ الصنف</button></form></section><section className="panel panel-large"><div className="panel-heading"><div><h3>كمية المخزن</h3><p>{products.length} صنف مسجل · المخزن الرئيسي</p></div><Warehouse size={20} /></div><ListToolbar query={query} onQueryChange={setQuery} placeholder="ابحث باسم الصنف أو الكود" totalItems={pagedProducts.totalItems} />{pagedProducts.totalItems === 0 ? <EmptyState text={query ? "لا توجد نتائج مطابقة" : "لم تضف أصناف بعد"} /> : <><div className="table-wrap"><table><thead><tr><th>الصنف</th><th>الوحدة</th><th>الكمية</th><th>متوسط التكلفة / م²</th><th>سعر البيع / م²</th><th>الحالة</th></tr></thead><tbody>{pagedProducts.items.map((product) => <tr key={product.id}><td className="strong-cell">{product.name}</td><td>م²</td><td className="strong-cell">{quantity(product.stockQtyScaled)}</td><td>{money(product.avgCostMinor)}</td><td>{money(product.salePriceMinor)}</td><td>{product.stockQtyScaled <= product.minStockQtyScaled ? <span className="status-badge status-warning">منخفض</span> : <span className="status-badge status-complete">متاح</span>}</td></tr>)}</tbody></table></div><Pagination currentPage={pagedProducts.currentPage} totalPages={pagedProducts.totalPages} onChange={setPage} /></>}</section></div></>;
+  const editProduct = (product: Product) => {
+    setEditingProductId(product.id);
+    setForm({
+      name: product.name,
+      purchasePrice: String(product.purchasePriceMinor / 100),
+      salePrice: String(product.salePriceMinor / 100),
+      minStock: String(product.minStockQtyScaled / 1000),
+      sku: product.sku ?? "",
+      category: product.category ?? "",
+    });
+  };
+  const saveProduct = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const payload = {
+      name: form.name,
+      purchasePriceMinor: Math.round(Number(form.purchasePrice || 0) * 100),
+      salePriceMinor: Math.round(Number(form.salePrice || 0) * 100),
+      minStockQtyScaled: Math.round(Number(form.minStock || 0) * 1000),
+      sku: form.sku,
+      category: form.category,
+    };
+    try {
+      if (editingProductId) {
+        await window.marbleApi.products.update(editingProductId, payload);
+        toast.success("تم تعديل الصنف");
+      } else {
+        await window.marbleApi.products.create({ ...payload, unitId: "unit-square-meter" });
+        toast.success("تم إضافة الصنف");
+      }
+      resetForm();
+      await load();
+      onChanged();
+    } catch (error) {
+      toast.error(errorMessage(error));
+    }
+  };
+  const removeProduct = async (product: Product) => {
+    if (!window.confirm(`سيتم حذف الصنف "${product.name}" من قائمة الأصناف. هل تريد المتابعة؟`)) return;
+    try {
+      await window.marbleApi.products.delete(product.id);
+      toast.success("تم حذف الصنف");
+      await load();
+      onChanged();
+    } catch (error) {
+      toast.error(errorMessage(error));
+    }
+  };
+
+  return <><PageIntro title="المخزن والأصناف" description="مخزن رئيسي واحد، وكل الكميات محسوبة بالمتر المربع." /><div className="split-layout"><section className="panel"><div className="panel-heading"><div><h3>{editingProductId ? "تعديل صنف" : "إضافة صنف"}</h3><p>الوحدة ثابتة: متر مربع (م²)</p></div><Package size={20} /></div><form className="form-stack" onSubmit={saveProduct}><Field label="اسم الصنف" required><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="رخام كرارا" /></Field><div className="fixed-unit"><span>الوحدة</span><strong>متر مربع (م²)</strong></div><div className="form-grid"><Field label="سعر الشراء الافتراضي / م²"><input type="number" min="0" step="0.01" value={form.purchasePrice} onChange={(event) => setForm({ ...form, purchasePrice: event.target.value })} /></Field><Field label="سعر البيع الافتراضي / م²"><input type="number" min="0" step="0.01" value={form.salePrice} onChange={(event) => setForm({ ...form, salePrice: event.target.value })} /></Field></div><div className="form-grid"><Field label="الكود"><input value={form.sku} onChange={(event) => setForm({ ...form, sku: event.target.value })} placeholder="اختياري" /></Field><Field label="التصنيف"><input value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="اختياري" /></Field></div><Field label="حد إعادة الطلب بالمتر المربع"><input type="number" min="0" step="0.001" value={form.minStock} onChange={(event) => setForm({ ...form, minStock: event.target.value })} /></Field><div className="button-row"><button className="primary-button" type="submit"><Plus size={17} /> {editingProductId ? "حفظ التعديل" : "حفظ الصنف"}</button>{editingProductId && <button className="outline-button" type="button" onClick={resetForm}>إلغاء التعديل</button>}</div></form></section><section className="panel panel-large"><div className="panel-heading"><div><h3>كمية المخزن</h3><p>{products.length} صنف مسجل · المخزن الرئيسي</p></div><Warehouse size={20} /></div><ListToolbar query={query} onQueryChange={setQuery} placeholder="ابحث باسم الصنف أو الكود" totalItems={pagedProducts.totalItems} />{pagedProducts.totalItems === 0 ? <EmptyState text={query ? "لا توجد نتائج مطابقة" : "لم تضف أصناف بعد"} /> : <><div className="table-wrap"><table><thead><tr><th>الصنف</th><th>الوحدة</th><th>الكمية</th><th>متوسط التكلفة / م²</th><th>سعر البيع الافتراضي</th><th>متوسط البيع الفعلي</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody>{pagedProducts.items.map((product) => <tr key={product.id}><td className="strong-cell">{product.name}{product.sku && <small className="product-subtitle">{product.sku}</small>}</td><td>م²</td><td className="strong-cell">{quantity(product.stockQtyScaled)}</td><td>{money(product.avgCostMinor)}</td><td>{money(product.salePriceMinor)}</td><td>{product.avgSalePriceMinor ? money(product.avgSalePriceMinor) : "—"}</td><td>{product.stockQtyScaled <= product.minStockQtyScaled ? <span className="status-badge status-warning">منخفض</span> : <span className="status-badge status-complete">متاح</span>}</td><td><div className="table-actions"><button type="button" className="text-button" onClick={() => editProduct(product)}><Pencil size={14} /> تعديل</button><button type="button" className="text-button danger" onClick={() => removeProduct(product)}><Trash2 size={14} /> حذف</button></div></td></tr>)}</tbody></table></div><Pagination currentPage={pagedProducts.currentPage} totalPages={pagedProducts.totalPages} onChange={setPage} /></>}</section></div></>;
 }
 
 type PurchaseLine = { productId: string; width: string; height: string; price: string };
@@ -464,17 +515,108 @@ function LineHeaders({ sale }: { sale?: boolean }) {
   return <div className={`line-headers ${sale ? "sale-line-headers" : ""}`}><span>{sale ? "نوع البند" : "الصنف"}</span>{sale ? <span>الصنف / اسم البند</span> : null}<span>{sale ? "العرض (م)" : "العرض (م)"}</span><span>الارتفاع (م)</span><span>الكمية م²</span><span>{sale ? "السعر / م² أو قيمة البند" : "السعر / م²"}</span><span>الإجمالي</span><span>حذف</span></div>;
 }
 
+export function InvoiceComposerModal({ open, title, onClose, children }: { open: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return <div className="modal-backdrop invoice-composer-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal-panel invoice-composer-panel" role="dialog" aria-modal="true" aria-labelledby="invoice-composer-title"><div className="modal-heading"><div><h2 id="invoice-composer-title">{title}</h2><p>أدخل بيانات الفاتورة ثم احفظها لتحديث الحساب والمخزن.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="إغلاق نافذة الفاتورة"><X size={18} /></button></div><div className="invoice-composer-body">{children}</div></section></div>;
+}
+
+function PartyAutocomplete({
+  label,
+  parties,
+  value,
+  onChange,
+}: {
+  label: string;
+  parties: Party[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const selected = parties.find((party) => party.id === value);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query]);
+
+  const results = filterAndPaginate(
+    parties,
+    query,
+    (party, normalizedQuery) => normalizeSearch(`${party.name} ${party.phone} ${party.address}`).includes(normalizedQuery),
+    page,
+    10,
+  );
+  const inputValue = open ? query : selected ? `${selected.name}${selected.phone ? ` · ${selected.phone}` : ""}` : query;
+
+  return <div className="party-autocomplete" ref={wrapperRef}>
+    <label className="field">
+      <span>{label} <em>*</em></span>
+      <div className="autocomplete-control">
+        <input
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          placeholder="ابحث بالاسم أو الهاتف أو العنوان"
+          value={inputValue}
+          onFocus={() => { setOpen(true); setQuery(""); }}
+          onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
+        />
+        {value && <button type="button" className="autocomplete-clear" aria-label={`مسح ${label}`} onMouseDown={(event) => event.preventDefault()} onClick={() => { onChange(""); setQuery(""); setOpen(true); }}><X size={14} /></button>}
+      </div>
+    </label>
+    {open && <div className="autocomplete-menu" role="listbox">
+      {results.items.length ? results.items.map((party) => <button
+        type="button"
+        role="option"
+        aria-selected={party.id === value}
+        className="autocomplete-option"
+        key={party.id}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => { onChange(party.id); setQuery(""); setOpen(false); }}
+      >
+        <strong>{party.name}</strong>
+        <span>{[party.phone, party.address].filter(Boolean).join(" · ") || "بدون بيانات إضافية"}</span>
+      </button>) : <div className="autocomplete-empty">لا توجد نتائج مطابقة</div>}
+      {results.totalPages > 1 && <div className="autocomplete-pagination">
+        <button type="button" className="page-button" disabled={results.currentPage <= 1} onMouseDown={(event) => event.preventDefault()} onClick={() => setPage(results.currentPage - 1)}><ChevronRight size={13} /> السابق</button>
+        <span>{results.currentPage} / {results.totalPages}</span>
+        <button type="button" className="page-button" disabled={results.currentPage >= results.totalPages} onMouseDown={(event) => event.preventDefault()} onClick={() => setPage(results.currentPage + 1)}>التالي <ChevronLeft size={13} /></button>
+      </div>}
+    </div>}
+  </div>;
+}
+
 function PurchasesPage({ refreshToken, onChanged }: { refreshToken: number; onChanged: () => void }) {
   const [suppliers, setSuppliers] = useState<Party[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [form, setForm] = useState({ supplierId: "", paid: "", accountId: "account-cash-main", method: "cash" });
-  const [newSupplier, setNewSupplier] = useState({ name: "", phone: "" });
+  const [newSupplier, setNewSupplier] = useState({ name: "", phone: "", address: "" });
   const [lines, setLines] = useState<PurchaseLine[]>([newPurchaseLine()]);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
   const load = () => Promise.all([window.marbleApi.parties.list("supplier"), window.marbleApi.products.list(), window.marbleApi.purchases.list(), window.marbleApi.finance.accounts()]).then(([s, p, i, a]) => { setSuppliers(s as Party[]); setProducts(p as Product[]); setInvoices(i as PurchaseInvoice[]); setAccounts(a as Account[]); }).catch((error) => toast.error(errorMessage(error)));
   useEffect(() => { load(); }, [refreshToken]);
   useEffect(() => { setPage(1); }, [query]);
@@ -483,7 +625,7 @@ function PurchasesPage({ refreshToken, onChanged }: { refreshToken: number; onCh
   const paidMinor = amountInputToMinor(form.paid);
   const remainingMinor = Math.max(0, total - paidMinor);
   const validLines = lines.filter((line) => line.productId && areaQtyScaled(line.width, line.height) > 0);
-  const addSupplier = async () => { try { const supplier = await window.marbleApi.parties.create({ ...newSupplier, kind: "supplier" }); setNewSupplier({ name: "", phone: "" }); setForm({ ...form, supplierId: (supplier as Party).id }); await load(); toast.success("تم إضافة المورد"); } catch (error) { toast.error(errorMessage(error)); } };
+  const addSupplier = async () => { try { const supplier = await window.marbleApi.parties.create({ ...newSupplier, kind: "supplier" }); setNewSupplier({ name: "", phone: "", address: "" }); setForm({ ...form, supplierId: (supplier as Party).id }); await load(); toast.success("تم إضافة المورد"); } catch (error) { toast.error(errorMessage(error)); } };
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!validLines.length) { toast.error("أضف صنفًا وحدد العرض والارتفاع"); return; }
@@ -495,9 +637,10 @@ function PurchasesPage({ refreshToken, onChanged }: { refreshToken: number; onCh
       setLines([newPurchaseLine()]);
       await load();
       onChanged();
+      setComposerOpen(false);
     } catch (error) { toast.error(errorMessage(error)); }
   };
-  return <><PageIntro title="المشتريات" description="سجل التوريد بالمتر المربع والرصيد المستحق للموردين." /><div className="split-layout"><section className="panel"><div className="panel-heading"><div><h3>فاتورة شراء جديدة</h3><p>العرض × الارتفاع = الكمية بالمتر المربع</p></div><ShoppingBag size={20} /></div><form className="form-stack" onSubmit={save}><Field label="المورد" required><select value={form.supplierId} onChange={(event) => setForm({ ...form, supplierId: event.target.value })}><option value="">اختر المورد</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name} {supplier.phone ? `· ${supplier.phone}` : ""}</option>)}</select></Field><div className="inline-create"><input placeholder="اسم مورد جديد" value={newSupplier.name} onChange={(event) => setNewSupplier({ ...newSupplier, name: event.target.value })} /><input placeholder="هاتف المورد" value={newSupplier.phone} onChange={(event) => setNewSupplier({ ...newSupplier, phone: event.target.value })} /><button type="button" className="small-button" onClick={addSupplier}><Plus size={14} /> إضافة</button></div><div className="line-editor"><LineHeaders />{lines.map((line, index) => { const qtyScaled = areaQtyScaled(line.width, line.height); return <div className="line-item purchase-line" key={index}><label className="line-cell"><span>الصنف</span><select value={line.productId} onChange={(event) => { const product = products.find((item) => item.id === event.target.value); const next = [...lines]; next[index] = { ...line, productId: event.target.value, price: product ? String(product.purchasePriceMinor / 100) : line.price }; setLines(next); }}><option value="">اختر الصنف</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="line-cell"><span>العرض (م)</span><input type="number" min="0" step="0.001" value={line.width} onChange={(event) => updatePurchaseLine(lines, setLines, index, "width", event.target.value)} /></label><label className="line-cell"><span>الارتفاع (م)</span><input type="number" min="0" step="0.001" value={line.height} onChange={(event) => updatePurchaseLine(lines, setLines, index, "height", event.target.value)} /></label><div className="computed-cell"><span>الكمية م²</span><strong>{quantity(qtyScaled)}</strong></div><label className="line-cell"><span>السعر / م²</span><input type="number" min="0" step="0.01" value={line.price} onChange={(event) => updatePurchaseLine(lines, setLines, index, "price", event.target.value)} /></label><div className="computed-cell"><span>الإجمالي</span><strong>{money(areaLineTotal(line.width, line.height, line.price))}</strong></div>{lines.length > 1 ? <button type="button" className="remove-line" aria-label="حذف الصنف" onClick={() => setLines(lines.filter((_, i) => i !== index))}><Trash2 size={15} /></button> : <span className="remove-placeholder" />}</div>; })}</div><button type="button" className="outline-button" onClick={() => setLines([...lines, newPurchaseLine()])}><Plus size={16} /> إضافة صنف</button><div className="form-grid"><Field label="المدفوع الآن"><input type="number" min="0" step="0.01" value={form.paid} onChange={(event) => setForm({ ...form, paid: event.target.value })} /></Field><Field label="طريقة الدفع"><select value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}><option value="cash">نقدي</option><option value="transfer">تحويل</option><option value="card">بطاقة</option><option value="cheque">شيك</option></select></Field></div><Field label="الحساب الذي خرجت منه الدفعة"><select value={form.accountId} onChange={(event) => setForm({ ...form, accountId: event.target.value })}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field><InvoiceTotals totalMinor={total} paidMinor={paidMinor} remainingMinor={remainingMinor} /><button className="primary-button" type="submit" disabled={!validLines.length}><Receipt size={17} /> حفظ الفاتورة</button></form></section><section className="panel panel-large"><div className="panel-heading"><div><h3>فواتير المشتريات</h3><p>{invoices.length} فاتورة</p></div><FileText size={20} /></div><ListToolbar query={query} onQueryChange={setQuery} placeholder="ابحث برقم الفاتورة أو اسم/هاتف المورد" totalItems={pagedInvoices.totalItems} />{pagedInvoices.totalItems === 0 ? <EmptyState text={query ? "لا توجد نتائج مطابقة" : "لا توجد فواتير بعد"} /> : <><InvoiceTable type="purchase" rows={pagedInvoices.items} onDetails={setDetailId} /><Pagination currentPage={pagedInvoices.currentPage} totalPages={pagedInvoices.totalPages} onChange={setPage} /></>}</section></div><InvoiceDetailsModal invoiceType="purchase" invoiceId={detailId} onClose={() => setDetailId(null)} onChanged={async () => { await load(); onChanged(); }} /></>;
+  return <><PageIntro title="المشتريات" description="سجل التوريد بالمتر المربع والرصيد المستحق للموردين." /><div className="split-layout"><section className="panel invoice-create-card"><div className="panel-heading"><div><h3>إضافة فاتورة شراء</h3><p>افتح نافذة الفاتورة لإضافة التوريد والدفعة.</p></div><ShoppingBag size={20} /></div><button type="button" className="primary-button" onClick={() => setComposerOpen(true)}><Plus size={17} /> فاتورة شراء جديدة</button></section><InvoiceComposerModal open={composerOpen} title="فاتورة شراء جديدة" onClose={() => setComposerOpen(false)}><section className="invoice-composer-form"><form className="form-stack" onSubmit={save}><PartyAutocomplete label="المورد" parties={suppliers} value={form.supplierId} onChange={(id) => setForm({ ...form, supplierId: id })} /><div className="party-create-grid"><input placeholder="اسم مورد جديد" value={newSupplier.name} onChange={(event) => setNewSupplier({ ...newSupplier, name: event.target.value })} /><input placeholder="هاتف مورد" value={newSupplier.phone} onChange={(event) => setNewSupplier({ ...newSupplier, phone: event.target.value })} /><input placeholder="عنوان مورد" value={newSupplier.address} onChange={(event) => setNewSupplier({ ...newSupplier, address: event.target.value })} /><button type="button" className="small-button" onClick={addSupplier}><Plus size={14} /> إضافة</button></div><div className="line-editor"><LineHeaders />{lines.map((line, index) => { const qtyScaled = areaQtyScaled(line.width, line.height); return <div className="line-item purchase-line" key={index}><label className="line-cell"><span>الصنف</span><select value={line.productId} onChange={(event) => { const product = products.find((item) => item.id === event.target.value); const next = [...lines]; next[index] = { ...line, productId: event.target.value, price: product ? String(product.purchasePriceMinor / 100) : line.price }; setLines(next); }}><option value="">اختر الصنف</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="line-cell"><span>العرض (م)</span><input type="number" min="0" step="0.001" value={line.width} onChange={(event) => updatePurchaseLine(lines, setLines, index, "width", event.target.value)} /></label><label className="line-cell"><span>الارتفاع (م)</span><input type="number" min="0" step="0.001" value={line.height} onChange={(event) => updatePurchaseLine(lines, setLines, index, "height", event.target.value)} /></label><div className="computed-cell"><span>الكمية م²</span><strong>{quantity(qtyScaled)}</strong></div><label className="line-cell"><span>السعر / م²</span><input type="number" min="0" step="0.01" value={line.price} onChange={(event) => updatePurchaseLine(lines, setLines, index, "price", event.target.value)} /></label><div className="computed-cell"><span>الإجمالي</span><strong>{money(areaLineTotal(line.width, line.height, line.price))}</strong></div>{lines.length > 1 ? <button type="button" className="remove-line" aria-label="حذف الصنف" onClick={() => setLines(lines.filter((_, i) => i !== index))}><Trash2 size={15} /></button> : <span className="remove-placeholder" />}</div>; })}</div><button type="button" className="outline-button" onClick={() => setLines([...lines, newPurchaseLine()])}><Plus size={16} /> إضافة صنف</button><div className="form-grid"><Field label="المدفوع الآن"><input type="number" min="0" step="0.01" value={form.paid} onChange={(event) => setForm({ ...form, paid: event.target.value })} /></Field><Field label="طريقة الدفع"><select value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}><option value="cash">نقدي</option><option value="transfer">تحويل</option><option value="card">بطاقة</option><option value="cheque">شيك</option></select></Field></div><Field label="الحساب الذي خرجت منه الدفعة"><select value={form.accountId} onChange={(event) => setForm({ ...form, accountId: event.target.value })}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field><InvoiceTotals totalMinor={total} paidMinor={paidMinor} remainingMinor={remainingMinor} /><button className="primary-button" type="submit" disabled={!validLines.length}><Receipt size={17} /> حفظ الفاتورة</button></form></section></InvoiceComposerModal><section className="panel panel-large"><div className="panel-heading"><div><h3>فواتير المشتريات</h3><p>{invoices.length} فاتورة</p></div><FileText size={20} /></div><ListToolbar query={query} onQueryChange={setQuery} placeholder="ابحث برقم الفاتورة أو اسم/هاتف المورد" totalItems={pagedInvoices.totalItems} />{pagedInvoices.totalItems === 0 ? <EmptyState text={query ? "لا توجد نتائج مطابقة" : "لا توجد فواتير بعد"} /> : <><InvoiceTable type="purchase" rows={pagedInvoices.items} onDetails={setDetailId} /><Pagination currentPage={pagedInvoices.currentPage} totalPages={pagedInvoices.totalPages} onChange={setPage} /></>}</section></div><InvoiceDetailsModal invoiceType="purchase" invoiceId={detailId} onClose={() => setDetailId(null)} onChanged={async () => { await load(); onChanged(); }} /></>;
 }
 
 function SalesPage({ refreshToken, onChanged }: { refreshToken: number; onChanged: () => void }) {
@@ -506,11 +649,12 @@ function SalesPage({ refreshToken, onChanged }: { refreshToken: number; onChange
   const [invoices, setInvoices] = useState<SaleInvoice[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [form, setForm] = useState({ customerId: "", paid: "", installationDate: "", accountId: "account-cash-main", method: "cash" });
-  const [newCustomer, setNewCustomer] = useState({ name: "", phone: "" });
+  const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", address: "" });
   const [lines, setLines] = useState<SaleLine[]>([newStockLine()]);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
   const load = () => Promise.all([window.marbleApi.parties.list("customer"), window.marbleApi.products.list(), window.marbleApi.sales.list(), window.marbleApi.finance.accounts()]).then(([c, p, i, a]) => { setCustomers(c as Party[]); setProducts(p as Product[]); setInvoices(i as SaleInvoice[]); setAccounts(a as Account[]); }).catch((error) => toast.error(errorMessage(error)));
   useEffect(() => { load(); }, [refreshToken]);
   useEffect(() => { setPage(1); }, [query]);
@@ -520,15 +664,15 @@ function SalesPage({ refreshToken, onChanged }: { refreshToken: number; onChange
   const remainingMinor = Math.max(0, total - paidMinor);
   const validLines = lines.filter((line) => line.kind === "stock" ? line.productId && areaQtyScaled(line.width, line.height) > 0 : line.name.trim() && amountInputToMinor(line.price) > 0);
   const hasExtra = lines.some((line) => line.kind === "extra");
-  const addCustomer = async () => { try { const customer = await window.marbleApi.parties.create({ ...newCustomer, kind: "customer" }); setNewCustomer({ name: "", phone: "" }); setForm({ ...form, customerId: (customer as Party).id }); await load(); toast.success("تم إضافة العميل"); } catch (error) { toast.error(errorMessage(error)); } };
+  const addCustomer = async () => { try { const customer = await window.marbleApi.parties.create({ ...newCustomer, kind: "customer" }); setNewCustomer({ name: "", phone: "", address: "" }); setForm({ ...form, customerId: (customer as Party).id }); await load(); toast.success("تم إضافة العميل"); } catch (error) { toast.error(errorMessage(error)); } };
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!validLines.length) { toast.error("أضف صنفًا وحدد العرض والارتفاع"); return; }
     if (paidMinor > total) { toast.error("المدفوع أكبر من إجمالي الفاتورة"); return; }
     const items: SaleLineInput[] = validLines.map((line) => line.kind === "stock" ? { kind: "stock", productId: line.productId, width: Number(line.width), height: Number(line.height), qtyScaled: areaQtyScaled(line.width, line.height), unitPriceMinor: Math.round(Number(line.price) * 100) } : { kind: "extra", name: line.name.trim(), qtyScaled: 1000, unitPriceMinor: amountInputToMinor(line.price) });
-    try { await window.marbleApi.sales.create({ customerId: form.customerId, accountId: form.accountId, method: form.method as "cash" | "bank" | "transfer" | "card" | "cheque" | "other", paidMinor, items, installation: form.installationDate ? { scheduledAt: `${form.installationDate}T09:00:00.000Z` } : undefined }); toast.success("تم حفظ فاتورة البيع وتحديث حساب العميل"); setForm({ customerId: "", paid: "", installationDate: "", accountId: "account-cash-main", method: "cash" }); setLines([newStockLine()]); await load(); onChanged(); } catch (error) { toast.error(errorMessage(error)); }
+    try { await window.marbleApi.sales.create({ customerId: form.customerId, accountId: form.accountId, method: form.method as "cash" | "bank" | "transfer" | "card" | "cheque" | "other", paidMinor, items, installation: form.installationDate ? { scheduledAt: `${form.installationDate}T09:00:00.000Z` } : undefined }); toast.success("تم حفظ فاتورة البيع وتحديث حساب العميل"); setForm({ customerId: "", paid: "", installationDate: "", accountId: "account-cash-main", method: "cash" }); setLines([newStockLine()]); await load(); onChanged(); setComposerOpen(false); } catch (error) { toast.error(errorMessage(error)); }
   };
-  return <><PageIntro title="المبيعات" description="فاتورة العميل بالمتر المربع مع دفعة وموعد تركيب اختياري." /><div className="split-layout"><section className="panel"><div className="panel-heading"><div><h3>فاتورة بيع جديدة</h3><p>العرض × الارتفاع = الكمية، وسعر البيع لكل م²</p></div><ShoppingCart size={20} /></div><form className="form-stack" onSubmit={save}><Field label="العميل" required><select value={form.customerId} onChange={(event) => setForm({ ...form, customerId: event.target.value })}><option value="">اختر العميل</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name} {customer.phone ? `· ${customer.phone}` : ""}</option>)}</select></Field><div className="inline-create"><input placeholder="اسم عميل جديد" value={newCustomer.name} onChange={(event) => setNewCustomer({ ...newCustomer, name: event.target.value })} /><input placeholder="هاتف العميل" value={newCustomer.phone} onChange={(event) => setNewCustomer({ ...newCustomer, phone: event.target.value })} /><button type="button" className="small-button" onClick={addCustomer}><Plus size={14} /> إضافة</button></div><div className="line-editor"><LineHeaders sale />{lines.map((line, index) => line.kind === "stock" ? <div className="line-item sale-line" key={index}><label className="line-cell"><span>نوع البند</span><select value={line.kind} onChange={(event) => updateSaleLine(lines, setLines, index, "kind", event.target.value)}><option value="stock">صنف من المخزن</option><option value="extra">بند إضافي</option></select></label><label className="line-cell"><span>الصنف</span><select value={line.productId} onChange={(event) => { const product = products.find((item) => item.id === event.target.value); const next = [...lines]; next[index] = { ...line, productId: event.target.value, price: product ? String(product.salePriceMinor / 100) : line.price }; setLines(next); }}><option value="">اختر الصنف</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="line-cell"><span>العرض (م)</span><input type="number" min="0" step="0.001" value={line.width} onChange={(event) => updateSaleLine(lines, setLines, index, "width", event.target.value)} /></label><label className="line-cell"><span>الارتفاع (م)</span><input type="number" min="0" step="0.001" value={line.height} onChange={(event) => updateSaleLine(lines, setLines, index, "height", event.target.value)} /></label><div className="computed-cell"><span>الكمية م²</span><strong>{quantity(areaQtyScaled(line.width, line.height))}</strong></div><label className="line-cell"><span>السعر / م²</span><input type="number" min="0" step="0.01" value={line.price} onChange={(event) => updateSaleLine(lines, setLines, index, "price", event.target.value)} /></label><div className="computed-cell"><span>الإجمالي</span><strong>{money(areaLineTotal(line.width, line.height, line.price))}</strong></div>{lines.length > 1 ? <button type="button" className="remove-line" aria-label="حذف البند" onClick={() => setLines(lines.filter((_, i) => i !== index))}><Trash2 size={15} /></button> : <span className="remove-placeholder" />}</div> : <div className="line-item extra-line" key={index}><label className="line-cell extra-name"><span>نوع البند</span><select value={line.kind} onChange={(event) => updateSaleLine(lines, setLines, index, "kind", event.target.value)}><option value="stock">صنف من المخزن</option><option value="extra">بند إضافي</option></select></label><label className="line-cell extra-name"><span>اسم البند الإضافي</span><input value={line.name} onChange={(event) => updateSaleLine(lines, setLines, index, "name", event.target.value)} placeholder="تركيب أو نقل" /></label><div className="extra-note">البند الإضافي لا يخصم من المخزن</div><label className="line-cell"><span>القيمة</span><input type="number" min="0" step="0.01" value={line.price} onChange={(event) => updateSaleLine(lines, setLines, index, "price", event.target.value)} /></label><div className="computed-cell"><span>الإجمالي</span><strong>{money(amountInputToMinor(line.price))}</strong></div>{lines.length > 1 ? <button type="button" className="remove-line" aria-label="حذف البند" onClick={() => setLines(lines.filter((_, i) => i !== index))}><Trash2 size={15} /></button> : <span className="remove-placeholder" />}</div>)}</div><div className="button-row"><button type="button" className="outline-button" onClick={() => setLines([...lines, newStockLine()])}><Plus size={16} /> إضافة صنف</button><button type="button" className="ghost-button" disabled={hasExtra} onClick={() => setLines([...lines, newExtraLine()])}><Plus size={16} /> إضافة بند إضافي اختياري</button></div><div className="form-grid"><Field label="المدفوع الآن"><input type="number" min="0" step="0.01" value={form.paid} onChange={(event) => setForm({ ...form, paid: event.target.value })} /></Field><Field label="طريقة الدفع"><select value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}><option value="cash">نقدي</option><option value="transfer">تحويل</option><option value="card">بطاقة</option><option value="cheque">شيك</option></select></Field></div><div className="form-grid"><Field label="الحساب الذي دخلت إليه الدفعة"><select value={form.accountId} onChange={(event) => setForm({ ...form, accountId: event.target.value })}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field><Field label="موعد التركيب"><input type="date" value={form.installationDate} onChange={(event) => setForm({ ...form, installationDate: event.target.value })} /></Field></div><InvoiceTotals totalMinor={total} paidMinor={paidMinor} remainingMinor={remainingMinor} /><button className="primary-button" type="submit" disabled={!validLines.length}><Receipt size={17} /> حفظ الفاتورة</button></form></section><section className="panel panel-large"><div className="panel-heading"><div><h3>فواتير المبيعات</h3><p>{invoices.length} فاتورة</p></div><FileText size={20} /></div><ListToolbar query={query} onQueryChange={setQuery} placeholder="ابحث برقم الفاتورة أو اسم/هاتف العميل" totalItems={pagedInvoices.totalItems} />{pagedInvoices.totalItems === 0 ? <EmptyState text={query ? "لا توجد نتائج مطابقة" : "لا توجد فواتير بعد"} /> : <><InvoiceTable type="sale" rows={pagedInvoices.items} onDetails={setDetailId} onCancel={async (id) => { try { await window.marbleApi.sales.cancel(id); toast.success("تم إلغاء الفاتورة وعكس الحركات"); await load(); onChanged(); } catch (error) { toast.error(errorMessage(error)); } }} /><Pagination currentPage={pagedInvoices.currentPage} totalPages={pagedInvoices.totalPages} onChange={setPage} /></>}</section></div><InvoiceDetailsModal invoiceType="sale" invoiceId={detailId} onClose={() => setDetailId(null)} onChanged={async () => { await load(); onChanged(); }} /></>;
+  return <><PageIntro title="المبيعات" description="فاتورة العميل بالمتر المربع مع دفعة وموعد تركيب اختياري." /><div className="split-layout"><section className="panel invoice-create-card"><div className="panel-heading"><div><h3>إضافة فاتورة بيع</h3><p>افتح نافذة الفاتورة لإضافة العميل والأصناف والدفع.</p></div><ShoppingCart size={20} /></div><button type="button" className="primary-button" onClick={() => setComposerOpen(true)}><Plus size={17} /> فاتورة بيع جديدة</button></section><InvoiceComposerModal open={composerOpen} title="فاتورة بيع جديدة" onClose={() => setComposerOpen(false)}><section className="invoice-composer-form"><form className="form-stack" onSubmit={save}><PartyAutocomplete label="العميل" parties={customers} value={form.customerId} onChange={(id) => setForm({ ...form, customerId: id })} /><div className="party-create-grid"><input placeholder="اسم عميل جديد" value={newCustomer.name} onChange={(event) => setNewCustomer({ ...newCustomer, name: event.target.value })} /><input placeholder="هاتف عميل" value={newCustomer.phone} onChange={(event) => setNewCustomer({ ...newCustomer, phone: event.target.value })} /><input placeholder="عنوان عميل" value={newCustomer.address} onChange={(event) => setNewCustomer({ ...newCustomer, address: event.target.value })} /><button type="button" className="small-button" onClick={addCustomer}><Plus size={14} /> إضافة</button></div><div className="line-editor"><LineHeaders sale />{lines.map((line, index) => line.kind === "stock" ? <div className="line-item sale-line" key={index}><label className="line-cell"><span>نوع البند</span><select value={line.kind} onChange={(event) => updateSaleLine(lines, setLines, index, "kind", event.target.value)}><option value="stock">صنف من المخزن</option><option value="extra">بند إضافي</option></select></label><label className="line-cell"><span>الصنف</span><select value={line.productId} onChange={(event) => { const product = products.find((item) => item.id === event.target.value); const next = [...lines]; next[index] = { ...line, productId: event.target.value, price: product ? String(product.salePriceMinor / 100) : line.price }; setLines(next); }}><option value="">اختر الصنف</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="line-cell"><span>العرض (م)</span><input type="number" min="0" step="0.001" value={line.width} onChange={(event) => updateSaleLine(lines, setLines, index, "width", event.target.value)} /></label><label className="line-cell"><span>الارتفاع (م)</span><input type="number" min="0" step="0.001" value={line.height} onChange={(event) => updateSaleLine(lines, setLines, index, "height", event.target.value)} /></label><div className="computed-cell"><span>الكمية م²</span><strong>{quantity(areaQtyScaled(line.width, line.height))}</strong></div><label className="line-cell"><span>السعر / م²</span><input type="number" min="0" step="0.01" value={line.price} onChange={(event) => updateSaleLine(lines, setLines, index, "price", event.target.value)} /></label><div className="computed-cell"><span>الإجمالي</span><strong>{money(areaLineTotal(line.width, line.height, line.price))}</strong></div>{lines.length > 1 ? <button type="button" className="remove-line" aria-label="حذف البند" onClick={() => setLines(lines.filter((_, i) => i !== index))}><Trash2 size={15} /></button> : <span className="remove-placeholder" />}</div> : <div className="line-item extra-line" key={index}><label className="line-cell extra-name"><span>نوع البند</span><select value={line.kind} onChange={(event) => updateSaleLine(lines, setLines, index, "kind", event.target.value)}><option value="stock">صنف من المخزن</option><option value="extra">بند إضافي</option></select></label><label className="line-cell extra-name"><span>اسم البند الإضافي</span><input value={line.name} onChange={(event) => updateSaleLine(lines, setLines, index, "name", event.target.value)} placeholder="تركيب أو نقل" /></label><div className="extra-note">البند الإضافي لا يخصم من المخزن</div><label className="line-cell"><span>القيمة</span><input type="number" min="0" step="0.01" value={line.price} onChange={(event) => updateSaleLine(lines, setLines, index, "price", event.target.value)} /></label><div className="computed-cell"><span>الإجمالي</span><strong>{money(amountInputToMinor(line.price))}</strong></div>{lines.length > 1 ? <button type="button" className="remove-line" aria-label="حذف البند" onClick={() => setLines(lines.filter((_, i) => i !== index))}><Trash2 size={15} /></button> : <span className="remove-placeholder" />}</div>)}</div><div className="button-row"><button type="button" className="outline-button" onClick={() => setLines([...lines, newStockLine()])}><Plus size={16} /> إضافة صنف</button><button type="button" className="ghost-button" disabled={hasExtra} onClick={() => setLines([...lines, newExtraLine()])}><Plus size={16} /> إضافة بند إضافي اختياري</button></div><div className="form-grid"><Field label="المدفوع الآن"><input type="number" min="0" step="0.01" value={form.paid} onChange={(event) => setForm({ ...form, paid: event.target.value })} /></Field><Field label="طريقة الدفع"><select value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}><option value="cash">نقدي</option><option value="transfer">تحويل</option><option value="card">بطاقة</option><option value="cheque">شيك</option></select></Field></div><div className="form-grid"><Field label="الحساب الذي دخلت إليه الدفعة"><select value={form.accountId} onChange={(event) => setForm({ ...form, accountId: event.target.value })}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field><Field label="موعد التركيب"><input type="date" value={form.installationDate} onChange={(event) => setForm({ ...form, installationDate: event.target.value })} /></Field></div><InvoiceTotals totalMinor={total} paidMinor={paidMinor} remainingMinor={remainingMinor} /><button className="primary-button" type="submit" disabled={!validLines.length}><Receipt size={17} /> حفظ الفاتورة</button></form></section></InvoiceComposerModal><section className="panel panel-large"><div className="panel-heading"><div><h3>فواتير المبيعات</h3><p>{invoices.length} فاتورة</p></div><FileText size={20} /></div><ListToolbar query={query} onQueryChange={setQuery} placeholder="ابحث برقم الفاتورة أو اسم/هاتف العميل" totalItems={pagedInvoices.totalItems} />{pagedInvoices.totalItems === 0 ? <EmptyState text={query ? "لا توجد نتائج مطابقة" : "لا توجد فواتير بعد"} /> : <><InvoiceTable type="sale" rows={pagedInvoices.items} onDetails={setDetailId} onCancel={async (id) => { try { await window.marbleApi.sales.cancel(id); toast.success("تم إلغاء الفاتورة وعكس الحركات"); await load(); onChanged(); } catch (error) { toast.error(errorMessage(error)); } }} /><Pagination currentPage={pagedInvoices.currentPage} totalPages={pagedInvoices.totalPages} onChange={setPage} /></>}</section></div><InvoiceDetailsModal invoiceType="sale" invoiceId={detailId} onClose={() => setDetailId(null)} onChanged={async () => { await load(); onChanged(); }} /></>;
 }
 
 function InvoiceTotals({ totalMinor, paidMinor, remainingMinor }: { totalMinor: number; paidMinor: number; remainingMinor: number }) {

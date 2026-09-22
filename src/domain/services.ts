@@ -12,6 +12,7 @@ import type {
   PaymentInput,
   ProductInput,
   ProductRecord,
+  ProductUpdateInput,
   PurchaseInput,
   SaleInput,
   SetupIds,
@@ -51,13 +52,19 @@ function accountExists(db: Database.Database, accountId: string): void {
 
 function productRow(db: Database.Database, productId: string): ProductRecord & { unitId: string } {
   const row = db.prepare(`
-    SELECT id, name, sku, category, unit_id as unitId,
-      purchase_price_minor as purchasePriceMinor,
-      sale_price_minor as salePriceMinor,
-      min_stock_qty_scaled as minStockQtyScaled,
-      stock_qty_scaled as stockQtyScaled,
-      avg_cost_minor as avgCostMinor
-    FROM products WHERE id = ? AND is_deleted = 0
+    SELECT p.id, p.name, p.sku, p.category, p.unit_id as unitId,
+      p.purchase_price_minor as purchasePriceMinor,
+      p.sale_price_minor as salePriceMinor,
+      p.min_stock_qty_scaled as minStockQtyScaled,
+      p.stock_qty_scaled as stockQtyScaled,
+      p.avg_cost_minor as avgCostMinor,
+      COALESCE((
+        SELECT ROUND(1.0 * SUM(sii.qty_scaled * sii.unit_price_minor) / NULLIF(SUM(sii.qty_scaled), 0))
+        FROM sales_invoice_items sii
+        JOIN sales_invoices si ON si.id = sii.invoice_id
+        WHERE sii.product_id = p.id AND sii.line_kind = 'stock' AND si.status = 'open'
+      ), 0) as avgSalePriceMinor
+    FROM products p WHERE p.id = ? AND p.is_deleted = 0
   `).get(productId) as (ProductRecord & { unitId: string }) | undefined;
   if (!row) throw new Error("الصنف غير موجود");
   return row;
@@ -199,6 +206,7 @@ export function createProduct(db: Database.Database, input: ProductInput): Produ
     minStockQtyScaled: input.minStockQtyScaled ?? 0,
     stockQtyScaled: 0,
     avgCostMinor: 0,
+    avgSalePriceMinor: 0,
     sku: input.sku?.trim() ?? "",
     category: input.category?.trim() ?? "",
   };
@@ -223,14 +231,83 @@ export function createProduct(db: Database.Database, input: ProductInput): Produ
 
 export function getProduct(db: Database.Database, productId: string): ProductRecord | undefined {
   return db.prepare(`
-    SELECT id, name, sku, category, unit_id as unitId,
-      purchase_price_minor as purchasePriceMinor,
-      sale_price_minor as salePriceMinor,
-      min_stock_qty_scaled as minStockQtyScaled,
-      stock_qty_scaled as stockQtyScaled,
-      avg_cost_minor as avgCostMinor
-    FROM products WHERE id = ?
+    SELECT p.id, p.name, p.sku, p.category, p.unit_id as unitId,
+      p.purchase_price_minor as purchasePriceMinor,
+      p.sale_price_minor as salePriceMinor,
+      p.min_stock_qty_scaled as minStockQtyScaled,
+      p.stock_qty_scaled as stockQtyScaled,
+      p.avg_cost_minor as avgCostMinor,
+      COALESCE((
+        SELECT ROUND(1.0 * SUM(sii.qty_scaled * sii.unit_price_minor) / NULLIF(SUM(sii.qty_scaled), 0))
+        FROM sales_invoice_items sii
+        JOIN sales_invoices si ON si.id = sii.invoice_id
+        WHERE sii.product_id = p.id AND sii.line_kind = 'stock' AND si.status = 'open'
+      ), 0) as avgSalePriceMinor
+    FROM products p WHERE p.id = ? AND p.is_deleted = 0
   `).get(productId) as ProductRecord | undefined;
+}
+
+export function updateProduct(db: Database.Database, productId: string, input: ProductUpdateInput): ProductRecord {
+  const current = productRow(db, productId);
+  const name = input.name?.trim() ?? current.name;
+  if (!name) throw new Error("اسم الصنف مطلوب");
+  const unitId = input.unitId ?? current.unitId;
+  if (!db.prepare("SELECT id FROM units WHERE id = ?").get(unitId)) throw new Error("وحدة الصنف غير موجودة");
+  const purchasePriceMinor = input.purchasePriceMinor ?? current.purchasePriceMinor;
+  const salePriceMinor = input.salePriceMinor ?? current.salePriceMinor;
+  const minStockQtyScaled = input.minStockQtyScaled ?? current.minStockQtyScaled;
+  if (![purchasePriceMinor, salePriceMinor].every((value) => Number.isInteger(value) && value >= 0)) {
+    throw new Error("أسعار الصنف غير صحيحة");
+  }
+  if (!Number.isInteger(minStockQtyScaled) || minStockQtyScaled < 0) {
+    throw new Error("حد إعادة الطلب غير صحيح");
+  }
+
+  db.prepare(`
+    UPDATE products
+    SET name = ?, sku = ?, category = ?, unit_id = ?, purchase_price_minor = ?, sale_price_minor = ?,
+      min_stock_qty_scaled = ?, updated_at = ?
+    WHERE id = ? AND is_deleted = 0
+  `).run(
+    name,
+    input.sku?.trim() ?? current.sku ?? "",
+    input.category?.trim() ?? current.category ?? "",
+    unitId,
+    purchasePriceMinor,
+    salePriceMinor,
+    minStockQtyScaled,
+    now(),
+    productId,
+  );
+  addAudit(db, "update", "product", productId, { name, salePriceMinor });
+  return getProduct(db, productId) as ProductRecord;
+}
+
+export function deleteProduct(db: Database.Database, productId: string): void {
+  const product = productRow(db, productId);
+  const references = db.prepare(`
+    SELECT 'purchase' as type, pi.invoice_number as invoiceNumber
+    FROM purchase_invoice_items pii
+    JOIN purchase_invoices pi ON pi.id = pii.invoice_id
+    WHERE pii.product_id = ?
+    UNION ALL
+    SELECT 'sale' as type, si.invoice_number as invoiceNumber
+    FROM sales_invoice_items sii
+    JOIN sales_invoices si ON si.id = sii.invoice_id
+    WHERE sii.product_id = ?
+    ORDER BY invoiceNumber
+  `).all(productId, productId) as Array<{ type: "purchase" | "sale"; invoiceNumber: number }>;
+  if (references.length) {
+    const labels = references.map((reference) => `${reference.type === "purchase" ? "فاتورة شراء" : "فاتورة بيع"} #${reference.invoiceNumber}`);
+    throw new Error(`لا يمكن حذف الصنف ${product.name} لأنه مرتبط بـ ${labels.join("، ")}`);
+  }
+  if (db.prepare("SELECT id FROM stock_movements WHERE product_id = ? LIMIT 1").get(productId)) {
+    throw new Error(`لا يمكن حذف الصنف ${product.name} لأنه مرتبط بحركات مخزن`);
+  }
+  db.transaction(() => {
+    db.prepare("UPDATE products SET is_deleted = 1, updated_at = ? WHERE id = ? AND is_deleted = 0").run(now(), productId);
+    addAudit(db, "delete", "product", productId, { name: product.name });
+  })();
 }
 
 export function createPurchase(db: Database.Database, input: PurchaseInput): InvoiceResult {
@@ -332,6 +409,9 @@ export function createSale(db: Database.Database, input: SaleInput): InvoiceResu
       }
       const product = productRow(db, item.productId);
       if (product.stockQtyScaled < qtyScaled) throw new Error(`المخزون غير كاف للصنف: ${product.name}`);
+      if (product.avgCostMinor > 0 && item.unitPriceMinor < product.avgCostMinor) {
+        throw new Error(`سعر بيع الصنف ${product.name} أقل من متوسط تكلفة المخزون (${product.avgCostMinor / 100} ج.م / م²)`);
+      }
       return {
         kind: item.kind,
         name: product.name,
@@ -487,13 +567,19 @@ export function listParties(db: Database.Database, kind?: "customer" | "supplier
 
 export function listProducts(db: Database.Database): ProductRecord[] {
   return db.prepare(`
-    SELECT id, name, sku, category, unit_id as unitId,
-      purchase_price_minor as purchasePriceMinor,
-      sale_price_minor as salePriceMinor,
-      min_stock_qty_scaled as minStockQtyScaled,
-      stock_qty_scaled as stockQtyScaled,
-      avg_cost_minor as avgCostMinor
-    FROM products WHERE is_deleted = 0 ORDER BY name
+    SELECT p.id, p.name, p.sku, p.category, p.unit_id as unitId,
+      p.purchase_price_minor as purchasePriceMinor,
+      p.sale_price_minor as salePriceMinor,
+      p.min_stock_qty_scaled as minStockQtyScaled,
+      p.stock_qty_scaled as stockQtyScaled,
+      p.avg_cost_minor as avgCostMinor,
+      COALESCE((
+        SELECT ROUND(1.0 * SUM(sii.qty_scaled * sii.unit_price_minor) / NULLIF(SUM(sii.qty_scaled), 0))
+        FROM sales_invoice_items sii
+        JOIN sales_invoices si ON si.id = sii.invoice_id
+        WHERE sii.product_id = p.id AND sii.line_kind = 'stock' AND si.status = 'open'
+      ), 0) as avgSalePriceMinor
+    FROM products p WHERE p.is_deleted = 0 ORDER BY p.name
   `).all() as ProductRecord[];
 }
 
